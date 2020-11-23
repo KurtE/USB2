@@ -58,11 +58,21 @@ static uint8_t rx_list[RX_NUM + 1];
 extern volatile uint8_t usb_configuration;
 
 static uint32_t mtp_TXcount = 0;
-static uint32_t mtp_RXcount = 0;
+//static uint32_t mtp_RXcount = 0;
 
 static void rx_queue_transfer(int i);
 static void rx_event(transfer_t *t);
 static void tx_event(transfer_t *t) {mtp_TXcount++;}
+static void rx_event_event(transfer_t *t);
+
+// Events end point
+static transfer_t tx_event_transfer[1] __attribute__ ((used, aligned(32)));
+static uint8_t tx_event_buffer[MTP_EVENT_SIZE] __attribute__ ((used, aligned(32)));
+
+static transfer_t rx_event_transfer[1] __attribute__ ((used, aligned(32)));
+static uint8_t rx_event_buffer[MTP_EVENT_SIZE] __attribute__ ((used, aligned(32)));
+
+
 
 void usb_mtp_configure(void)
 {
@@ -71,15 +81,27 @@ void usb_mtp_configure(void)
 	printf("usb_mtp_configure\n");
 	memset(tx_transfer, 0, sizeof(tx_transfer));
 	memset(rx_transfer, 0, sizeof(rx_transfer));
+	memset(rx_event_transfer, 0, sizeof(rx_event_transfer));
+	//memset(tx_event_transfer, 0, sizeof(tx_event_transfer));
 	tx_head = 0;
 	rx_head = 0;
 	rx_tail = 0;
 	usb_config_tx(MTP_TX_ENDPOINT, MTP_TX_SIZE, 0, tx_event);
 	usb_config_rx(MTP_RX_ENDPOINT, MTP_RX_SIZE, 0, rx_event);
+
+	// Not sure if you do two calls here for this type? .
+	usb_config_rx(MTP_EVENT_ENDPOINT, MTP_EVENT_SIZE, 0, rx_event_event);
+	//usb_config_tx(MTP_EVENT_ENDPOINT, MTP_EVENT_SIZE, 0, tx_event_event);
+
 	//usb_config_rx(MTP_RX_ENDPOINT, MTP_RX_SIZE, 0, NULL); // why does this not work?
 	int i;
 	for (i = 0; i < RX_NUM; i++) rx_queue_transfer(i);
 	digitalWriteFast(33, LOW);
+
+	// Lets do eents
+	usb_prepare_transfer(rx_event_transfer + 0, rx_event_buffer, MTP_EVENT_SIZE, MTP_EVENT_ENDPOINT);
+	usb_receive(MTP_EVENT_ENDPOINT, rx_event_transfer + 0);
+
 }
 
 /*************************************************************************/
@@ -142,28 +164,35 @@ int usb_mtp_recv(void *buffer, uint32_t timeout)
 	return MTP_RX_SIZE;
 }
 
-int usb_mtp_send(const void *buffer,  int len, uint32_t timeout)
+static int mtp_xfer_wait(transfer_t *xfer,uint32_t timeout)
 {
-	digitalWriteFast(36, HIGH);
-	transfer_t *xfer = tx_transfer + tx_head;
 	uint32_t wait_begin_at = systick_millis_count;
-
 	while (1) {
 		if (!usb_configuration) {
 			digitalToggleFast(39);
-			digitalWriteFast(36, LOW);
 			return -1; // usb not enumerated by host
 		}
 		uint32_t status = usb_transfer_status(xfer);
 		if (!(status & 0x80)) break; // transfer descriptor ready
 		if (systick_millis_count - wait_begin_at > timeout) {
 			digitalToggleFast(39);
-			digitalWriteFast(36, LOW);
 			return 0;
 		}
 		yield();
 	}
+	return 1;
+}
 
+int usb_mtp_send(const void *buffer,  int len, uint32_t timeout)
+{
+	digitalWriteFast(36, HIGH);
+	transfer_t *xfer = tx_transfer + tx_head;
+
+    int ret;
+	if((ret=mtp_xfer_wait(xfer,timeout)) <= 0) {
+		digitalWriteFast(36, LOW);
+		return ret;
+	}
 	uint8_t *txdata = txbuffer + (tx_head * MTP_TX_SIZE);
 	memcpy(txdata, buffer, len);
 	arm_dcache_flush_delete(txdata, len );
@@ -180,6 +209,53 @@ int usb_mtp_available(void)
 	if (rx_head != rx_tail) return MTP_RX_SIZE;
 	return 0;
 }
+
+/*************************************************************************/
+/**                               Event                                 **/
+/*************************************************************************/
+extern void usb2_phex(uint8_t n);
+extern void usb2_print(const char *psz);
+
+void rx_event_event(transfer_t *t) {
+	// bugbug: not sure if any correct way to get pointer to data and size
+	// so just dump our one...
+	usb2_print("rx_event_event");
+	for (uint16_t i=0; i < MTP_EVENT_SIZE; i++) {
+		usb2_phex(rx_event_buffer[i]);
+		if ((i & 0xf ) == 0xf) usb2_print("\n");
+	}
+	usb2_print("\n");
+}
+
+int usb_mtp_eventSend(const void *buffer, uint32_t timeout)
+{
+	transfer_t *xfer = tx_event_transfer;
+
+    int ret;
+	if((ret=mtp_xfer_wait(xfer,timeout)) <= 0) return ret;
+
+	uint8_t *txdata = tx_event_buffer;
+	memcpy(txdata, buffer, MTP_EVENT_SIZE);
+	usb_prepare_transfer(xfer, txdata, MTP_EVENT_SIZE,  MTP_EVENT_ENDPOINT);
+	usb_transmit(MTP_EVENT_ENDPOINT, xfer);
+	return MTP_EVENT_SIZE;
+}
+
+int usb_mtp_eventRecv(void *buffer, uint32_t timeout)
+{
+	transfer_t *xfer = rx_event_transfer;
+
+    int ret;
+	if((ret=mtp_xfer_wait(xfer,timeout)) <= 0) return ret;
+
+	memcpy(buffer, rx_event_buffer, MTP_EVENT_SIZE);
+	memset(xfer, 0, sizeof(rx_event_transfer));
+	usb_prepare_transfer(xfer, rx_event_buffer, MTP_EVENT_SIZE, MTP_EVENT_ENDPOINT);
+	usb_receive(MTP_EVENT_ENDPOINT, xfer);
+
+	return MTP_EVENT_SIZE;
+}
+
 
 #else
 void usb_mtp_configure(void) {}
