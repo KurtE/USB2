@@ -64,6 +64,7 @@ static void rx_queue_transfer(int i);
 static void rx_event(transfer_t *t);
 static void tx_event(transfer_t *t) {mtp_TXcount++;}
 static void rx_event_event(transfer_t *t);
+static void tx_event_event(transfer_t *t);
 
 // Events end point
 static transfer_t tx_event_transfer[1] __attribute__ ((used, aligned(32)));
@@ -90,17 +91,17 @@ void usb_mtp_configure(void)
 	usb_config_rx(MTP_RX_ENDPOINT, MTP_RX_SIZE, 0, rx_event);
 
 	// Not sure if you do two calls here for this type? .
-	usb_config_rx(MTP_EVENT_ENDPOINT, MTP_EVENT_SIZE, 0, rx_event_event);
-	//usb_config_tx(MTP_EVENT_ENDPOINT, MTP_EVENT_SIZE, 0, tx_event_event);
+	//usb_config_rx(MTP_EVENT_ENDPOINT, MTP_EVENT_SIZE, 0, rx_event_event);
+	usb_config_tx(MTP_EVENT_ENDPOINT, MTP_EVENT_SIZE, 0, tx_event_event);
 
 	//usb_config_rx(MTP_RX_ENDPOINT, MTP_RX_SIZE, 0, NULL); // why does this not work?
 	int i;
 	for (i = 0; i < RX_NUM; i++) rx_queue_transfer(i);
 	digitalWriteFast(33, LOW);
 
-	// Lets do eents
-	usb_prepare_transfer(rx_event_transfer + 0, rx_event_buffer, MTP_EVENT_SIZE, MTP_EVENT_ENDPOINT);
-	usb_receive(MTP_EVENT_ENDPOINT, rx_event_transfer + 0);
+	// Lets do events
+	//usb_prepare_transfer(rx_event_transfer + 0, rx_event_buffer, MTP_EVENT_SIZE, MTP_EVENT_ENDPOINT);
+	//usb_receive(MTP_EVENT_ENDPOINT, rx_event_transfer + 0);
 
 }
 
@@ -215,6 +216,20 @@ int usb_mtp_available(void)
 /*************************************************************************/
 extern void usb2_phex(uint8_t n);
 extern void usb2_print(const char *psz);
+extern void usb2_phex32(uint32_t n);
+
+void tx_event_event(transfer_t *t) {
+	// bugbug: not sure if any correct way to get pointer to data and size
+	// so just dump our one...
+	usb2_print("tx_event_event ST:");
+	usb2_phex32(t->status);
+	usb2_print(" P0:");
+	usb2_phex32(t->pointer0);
+	usb2_print(" CBP:");
+	usb2_phex32(t->callback_param);
+	usb2_print("\n");
+
+}
 
 void rx_event_event(transfer_t *t) {
 	// bugbug: not sure if any correct way to get pointer to data and size
